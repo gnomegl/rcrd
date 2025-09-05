@@ -1,0 +1,195 @@
+#!/usr/bin/env bash
+
+# @describe Screen recording tool with audio options
+# @option -m --mic "Record microphone audio" @default "true"
+# @option -s --system "Record system audio" @default "false"
+# @option -o --output "Output filename (auto-generated if not specified)" [string]
+# @option -q --quality "Video quality (ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow)" @default "medium"
+# @option -r --fps "Frames per second" @default "30"
+# @option --video-size "Video resolution (WIDTHxHEIGHT)" @default "1920x1080"
+# @flag   --no-audio "Disable all audio recording"
+# @flag   -v --verbose "Show verbose ffmpeg output"
+# @meta require-tools ffmpeg
+
+eval "$(argc --argc-eval "$0" "$@")"
+
+setup_colors() {
+  if [ -z "$TERM" ] || [ "$TERM" = "dumb" ]; then
+    bold="" reset="" blue="" green="" yellow="" cyan="" red=""
+  else
+    bold=$(tput bold) reset=$(tput sgr0) blue=$(tput setaf 4) green=$(tput setaf 2)
+    yellow=$(tput setaf 3) cyan=$(tput setaf 6) red=$(tput setaf 1)
+  fi
+}
+setup_colors
+
+generate_filename() {
+  if [ -n "$argc_output" ]; then
+    echo "$argc_output"
+  else
+    local timestamp=$(date +"%Y%m%d-%H%M%S")
+    echo "recording-${timestamp}.mp4"
+  fi
+}
+
+get_audio_device() {
+  local device_type="$1"
+  case "$device_type" in
+  mic)
+    pactl list sources short | grep -E "(input|mic)" | head -1 | cut -f2 || echo "default"
+    ;;
+  system)
+    pactl list sinks short | grep -E "(output|speaker)" | head -1 | awk '{print $2".monitor"}' || echo "default.monitor"
+    ;;
+  esac
+}
+
+build_ffmpeg_command() {
+  local display_offset="$1"
+  local filename="$2"
+  local cmd="ffmpeg"
+
+  [ "$argc_verbose" != "1" ] && cmd="$cmd -loglevel warning"
+
+  cmd="$cmd -f x11grab -video_size $argc_video_size -framerate $argc_fps -i $display_offset"
+
+  if [ "$argc_no_audio" != "1" ]; then
+    local audio_inputs=""
+    local input_count=0
+
+    if [ "$argc_mic" = "true" ]; then
+      local mic_device=$(get_audio_device "mic")
+      audio_inputs="$audio_inputs -f pulse -i $mic_device"
+      input_count=$((input_count + 1))
+    fi
+
+    if [ "$argc_system" = "true" ]; then
+      local system_device=$(get_audio_device "system")
+      audio_inputs="$audio_inputs -f pulse -i $system_device"
+      input_count=$((input_count + 1))
+    fi
+
+    if [ $input_count -gt 0 ]; then
+      cmd="$cmd $audio_inputs"
+
+      if [ $input_count -gt 1 ]; then
+        cmd="$cmd -filter_complex amix=inputs=$input_count:duration=longest"
+      fi
+    fi
+  fi
+
+  cmd="$cmd -c:v libx264 -preset $argc_quality -pix_fmt yuv420p"
+  cmd="$cmd $filename"
+
+  echo "$cmd"
+}
+
+record_screen() {
+  local display_offset="$1"
+  local position_name="$2"
+  local filename=$(generate_filename)
+
+  printf "${bold}Recording %s screen...${reset}\n" "$position_name"
+  printf "${cyan}Output:${reset} %s\n" "$filename"
+  printf "${cyan}Resolution:${reset} %s @ %s fps\n" "$argc_video_size" "$argc_fps"
+  printf "${cyan}Quality:${reset} %s\n" "$argc_quality"
+
+  if [ "$argc_no_audio" = "1" ]; then
+    printf "${yellow}Audio:${reset} Disabled\n"
+  else
+    printf "${cyan}Microphone:${reset} %s\n" "$argc_mic"
+    printf "${cyan}System Audio:${reset} %s\n" "$argc_system"
+  fi
+
+  echo ""
+  printf "${yellow}Press Ctrl+C to stop recording${reset}\n\n"
+
+  local ffmpeg_cmd=$(build_ffmpeg_command "$display_offset" "$filename")
+
+  if ! eval "$ffmpeg_cmd"; then
+    printf "${red}Recording failed${reset}\n" >&2
+    return 1
+  fi
+
+  printf "\n${green}Recording saved:${reset} %s\n" "$filename"
+}
+
+# @cmd Record the left monitor
+# @flag -f --fullscreen "Record in fullscreen mode"
+left() {
+  local display_offset=":0.0"
+  record_screen "$display_offset" "left"
+}
+
+# @cmd Record the right monitor
+# @flag -f --fullscreen "Record in fullscreen mode"
+right() {
+  local display_offset=":0.0+1920,0"
+  record_screen "$display_offset" "right"
+}
+
+# @cmd Record a specific area of the screen
+# @arg x "X coordinate of the top-left corner" [int]
+# @arg y "Y coordinate of the top-left corner" [int]
+# @arg width "Width of the recording area" [int]
+# @arg height "Height of the recording area" [int]
+area() {
+  local display_offset=":0.0+${argc_x},${argc_y}"
+  local custom_size="${argc_width}x${argc_height}"
+  local original_video_size="$argc_video_size"
+  argc_video_size="$custom_size"
+
+  record_screen "$display_offset" "custom area (${argc_width}x${argc_height})"
+
+  argc_video_size="$original_video_size"
+}
+
+# @cmd Record the primary display (auto-detect)
+primary() {
+  local display_offset=":0.0"
+  record_screen "$display_offset" "primary"
+}
+
+# @cmd List available audio devices
+devices() {
+  printf "${bold}Available Audio Sources:${reset}\n"
+  printf "${cyan}Microphone sources:${reset}\n"
+  pactl list sources short | grep -E "(input|mic)" | while read -r line; do
+    printf "  %s\n" "$(echo "$line" | cut -f2)"
+  done
+
+  printf "\n${cyan}System audio sources:${reset}\n"
+  pactl list sinks short | while read -r line; do
+    printf "  %s.monitor\n" "$(echo "$line" | cut -f2)"
+  done
+}
+
+# @cmd Test audio setup without recording
+test-audio() {
+  printf "${bold}Testing audio setup...${reset}\n"
+
+  if [ "$argc_no_audio" = "1" ]; then
+    printf "${yellow}Audio is disabled${reset}\n"
+    return 0
+  fi
+
+  if [ "$argc_mic" = "true" ]; then
+    local mic_device=$(get_audio_device "mic")
+    printf "${cyan}Microphone device:${reset} %s\n" "$mic_device"
+    if pactl list sources | grep -q "$mic_device"; then
+      printf "${green}✓ Microphone available${reset}\n"
+    else
+      printf "${red}✗ Microphone not found${reset}\n"
+    fi
+  fi
+
+  if [ "$argc_system" = "true" ]; then
+    local system_device=$(get_audio_device "system")
+    printf "${cyan}System audio device:${reset} %s\n" "$system_device"
+    if pactl list sources | grep -q "$system_device"; then
+      printf "${green}✓ System audio available${reset}\n"
+    else
+      printf "${red}✗ System audio not found${reset}\n"
+    fi
+  fi
+}
