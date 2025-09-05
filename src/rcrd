@@ -11,6 +11,87 @@
 # @flag   -v --verbose "Show verbose ffmpeg output"
 # @meta require-tools ffmpeg
 
+# @cmd Record the left monitor
+# @flag -f --fullscreen "Record in fullscreen mode"
+left() {
+  local display_offset=":0.0"
+  record_screen "$display_offset" "left"
+}
+
+# @cmd Record the right monitor
+# @flag -f --fullscreen "Record in fullscreen mode"
+right() {
+  local display_offset=":0.0+1920,0"
+  record_screen "$display_offset" "right"
+}
+
+# @cmd Record a specific area of the screen
+# @arg x "X coordinate of the top-left corner" [int]
+# @arg y "Y coordinate of the top-left corner" [int]
+# @arg width "Width of the recording area" [int]
+# @arg height "Height of the recording area" [int]
+area() {
+  local display_offset=":0.0+${argc_x},${argc_y}"
+  local custom_size="${argc_width}x${argc_height}"
+  local original_video_size="$argc_video_size"
+  argc_video_size="$custom_size"
+
+  record_screen "$display_offset" "custom area (${argc_width}x${argc_height})"
+
+  argc_video_size="$original_video_size"
+}
+
+# @cmd Record the primary display (auto-detect)
+primary() {
+  local display_offset=":0.0"
+  record_screen "$display_offset" "primary"
+}
+
+# @cmd List available audio devices
+devices() {
+  printf "${bold}Available Audio Sources:${reset}\n"
+  printf "${cyan}Microphone sources:${reset}\n"
+  pactl list sources short | grep -E "(input|mic)" | while read -r line; do
+    printf "  %s\n" "$(echo "$line" | cut -f2)"
+  done
+
+  printf "\n${cyan}System audio sources:${reset}\n"
+  pactl list sinks short | while read -r line; do
+    printf "  %s.monitor\n" "$(echo "$line" | cut -f2)"
+  done
+}
+
+# @cmd Test audio setup without recording
+test-audio() {
+  printf "${bold}Testing audio setup...${reset}\n"
+
+  if [ "$argc_no_audio" = "1" ]; then
+    printf "${yellow}Audio is disabled${reset}\n"
+    return 0
+  fi
+
+  if [ "$argc_mic" = "true" ]; then
+    local mic_device=$(get_audio_device "mic")
+    printf "${cyan}Microphone device:${reset} %s\n" "$mic_device"
+    if pactl list sources | grep -q "$mic_device"; then
+      printf "${green}✓ Microphone available${reset}\n"
+    else
+      printf "${red}✗ Microphone not found${reset}\n"
+    fi
+  fi
+
+  if [ "$argc_system" = "true" ]; then
+    local system_device=$(get_audio_device "system")
+    printf "${cyan}System audio device:${reset} %s\n" "$system_device"
+    if pactl list sources | grep -q "$system_device"; then
+      printf "${green}✓ System audio available${reset}\n"
+    else
+      printf "${red}✗ System audio not found${reset}\n"
+    fi
+  fi
+}
+
+# This must come after all function definitions
 eval "$(argc --argc-eval "$0" "$@")"
 
 setup_colors() {
@@ -112,84 +193,4 @@ record_screen() {
   fi
 
   printf "\n${green}Recording saved:${reset} %s\n" "$filename"
-}
-
-# @cmd Record the left monitor
-# @flag -f --fullscreen "Record in fullscreen mode"
-left() {
-  local display_offset=":0.0"
-  record_screen "$display_offset" "left"
-}
-
-# @cmd Record the right monitor
-# @flag -f --fullscreen "Record in fullscreen mode"
-right() {
-  local display_offset=":0.0+1920,0"
-  record_screen "$display_offset" "right"
-}
-
-# @cmd Record a specific area of the screen
-# @arg x "X coordinate of the top-left corner" [int]
-# @arg y "Y coordinate of the top-left corner" [int]
-# @arg width "Width of the recording area" [int]
-# @arg height "Height of the recording area" [int]
-area() {
-  local display_offset=":0.0+${argc_x},${argc_y}"
-  local custom_size="${argc_width}x${argc_height}"
-  local original_video_size="$argc_video_size"
-  argc_video_size="$custom_size"
-
-  record_screen "$display_offset" "custom area (${argc_width}x${argc_height})"
-
-  argc_video_size="$original_video_size"
-}
-
-# @cmd Record the primary display (auto-detect)
-primary() {
-  local display_offset=":0.0"
-  record_screen "$display_offset" "primary"
-}
-
-# @cmd List available audio devices
-devices() {
-  printf "${bold}Available Audio Sources:${reset}\n"
-  printf "${cyan}Microphone sources:${reset}\n"
-  pactl list sources short | grep -E "(input|mic)" | while read -r line; do
-    printf "  %s\n" "$(echo "$line" | cut -f2)"
-  done
-
-  printf "\n${cyan}System audio sources:${reset}\n"
-  pactl list sinks short | while read -r line; do
-    printf "  %s.monitor\n" "$(echo "$line" | cut -f2)"
-  done
-}
-
-# @cmd Test audio setup without recording
-test-audio() {
-  printf "${bold}Testing audio setup...${reset}\n"
-
-  if [ "$argc_no_audio" = "1" ]; then
-    printf "${yellow}Audio is disabled${reset}\n"
-    return 0
-  fi
-
-  if [ "$argc_mic" = "true" ]; then
-    local mic_device=$(get_audio_device "mic")
-    printf "${cyan}Microphone device:${reset} %s\n" "$mic_device"
-    if pactl list sources | grep -q "$mic_device"; then
-      printf "${green}✓ Microphone available${reset}\n"
-    else
-      printf "${red}✗ Microphone not found${reset}\n"
-    fi
-  fi
-
-  if [ "$argc_system" = "true" ]; then
-    local system_device=$(get_audio_device "system")
-    printf "${cyan}System audio device:${reset} %s\n" "$system_device"
-    if pactl list sources | grep -q "$system_device"; then
-      printf "${green}✓ System audio available${reset}\n"
-    else
-      printf "${red}✗ System audio not found${reset}\n"
-    fi
-  fi
 }
